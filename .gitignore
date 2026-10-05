@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environment
+face_env/
+face311/
+
+# VS Code
+.vscode/
+
+# Secrets
+.env
+
+# Generated encoding file
+EncodeFile.p
+
+# Camera test files
+camera_test*.jpg
+camera_test*.png
+
+# Zip/archive
+*.zip
+Images/

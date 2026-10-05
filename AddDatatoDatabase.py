@@ -1,11 +1,14 @@
+import os
+from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# 🔑 Replace these with your own Supabase credentials
-SUPABASE_URL = "https://auqxgnhnolllmubcngtt.supabase.co"
-SUPABASE_KEY = "Enter your supabase key."  # or anon key if testing
+load_dotenv()
 
-# ✅ Initialize Supabase client
+SUPABASE_URL = "https://wwfraugezutgfefjvlwq.supabase.co"
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 print("✅ Supabase connected successfully (AddDatatoDatabase)")
 
 # 🧠 Student data dictionary
@@ -29,8 +32,8 @@ data = {
         "last_attendance_time": "2022-12-11 00:54:34"
     },
     "6005": {
-        "name": "Ratnesh Tripathi",
-        "major": "Data Analyst",
+"name": "Varun Kumar Mishra",
+        "major": "AI/ML Engineer",
         "starting_year": 2023,
         "total_attendance": 7,
         "standing": "G",

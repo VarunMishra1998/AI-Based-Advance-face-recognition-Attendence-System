@@ -1,168 +1,390 @@
-import os
-import pickle
-import numpy as np
 import cv2
 import face_recognition
-import cvzone
 import numpy as np
-from datetime import datetime
+import pickle
+import os
+from datetime import datetime, timezone
 from supabase import create_client, Client
+from dotenv import load_dotenv
 
-# Supabase Configuration
-SUPABASE_URL = "https://auqxgnhnolllmubcngtt.supabase.co"
-SUPABASE_KEY = "Enter your supabase key."
+load_dotenv()
+# =========================================================
+# SUPABASE CONFIGURATION
+# =========================================================
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-print("✅ Supabase connected successfully (EncodeGenerator)")
+SUPABASE_URL = "https://wwfraugezutgfefjvlwq.supabase.co"
+
+# YAHAN APNI EXISTING SUPABASE KEY RAKHO
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase: Client = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY
+)
+
+print("✅ Supabase client created")
+
+
+# =========================================================
+# LOAD ENCODINGS
+# =========================================================
+
+print("📦 Loading EncodeFile.p...")
+
+try:
+    with open("EncodeFile.p", "rb") as file:
+        encodeListKnownWithIds = pickle.load(file)
+
+    encodeListKnown = encodeListKnownWithIds[0]
+    studentIds = encodeListKnownWithIds[1]
+
+    print(f"✅ Loaded {len(encodeListKnown)} face encodings")
+    print(f"✅ Student IDs: {studentIds}")
+
+except Exception as e:
+    print(f"❌ Could not load EncodeFile.p: {e}")
+    exit()
+
+
+# =========================================================
+# CAMERA
+# =========================================================
 
 cap = cv2.VideoCapture(0)
-cap.set(3, 640)
-cap.set(4, 480)
 
-imgBackground = cv2.imread('Resources/background.png')
+if not cap.isOpened():
+    print("❌ Camera could not be opened")
+    exit()
 
-# Importing the mode images into a list
-folderModePath = 'Resources/Modes'
-modePathList = os.listdir(folderModePath)
-imgModeList = []
-for path in modePathList:
-    imgModeList.append(cv2.imread(os.path.join(folderModePath, path)))
-# print(len(imgModeList))
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-# Load the encoding file
-print("Loading Encode File ...")
-file = open('EncodeFile.p', 'rb')
-encodeListKnownWithIds = pickle.load(file)
-file.close()
-encodeListKnown, studentIds = encodeListKnownWithIds
-# print(studentIds)
-print("Encode File Loaded")
+print("📷 Camera started")
+print("👉 Press Q to close")
+
+
+# =========================================================
+# VARIABLES
+# =========================================================
 
 modeType = 0
 counter = 0
 id = -1
-imgStudent = []
+imgStudent = None
+
+lastRecognizedId = None
+attendanceMarked = False
+
+
+# =========================================================
+# MAIN LOOP
+# =========================================================
 
 while True:
+
     success, img = cap.read()
+
+    if not success:
+        print("❌ Could not read camera frame")
+        continue
 
     # Resize for faster processing
     imgS = cv2.resize(img, (0, 0), fx=0.25, fy=0.25)
 
-    # Convert to RGB (face_recognition expects RGB)
+    # Convert BGR → RGB
     imgS = cv2.cvtColor(imgS, cv2.COLOR_BGR2RGB)
 
-    # Ensure contiguous memory and correct dtype
-    imgS = np.array(imgS, dtype=np.uint8, order='C')
-    imgS.setflags(write=True)
+    # Detect faces
+    faceCurFrame = face_recognition.face_locations(imgS)
 
-    # Debug info
-    print(f"imgS type: {type(imgS)}, dtype: {imgS.dtype}, shape: {imgS.shape}, contiguous: {imgS.flags['C_CONTIGUOUS']}")
+    # Encode detected faces
+    encodeCurFrame = face_recognition.face_encodings(
+        imgS,
+        faceCurFrame
+    )
 
-    # --- face detection ---
-    faceCurFrame = face_recognition.face_locations(imgS, model="hog")
-    encodeCurFrame = face_recognition.face_encodings(imgS, faceCurFrame)
 
-    imgBackground[162:162 + 480, 55:55 + 640] = img
-    imgBackground[44:44 + 633, 808:808 + 414] = imgModeList[modeType]
+    # =====================================================
+    # FACE RECOGNITION
+    # =====================================================
 
-    if faceCurFrame:
-        for encodeFace, faceLoc in zip(encodeCurFrame, faceCurFrame):
-            matches = face_recognition.compare_faces(encodeListKnown, encodeFace)
-            faceDis = face_recognition.face_distance(encodeListKnown, encodeFace)
-            # print("matches", matches)
-            # print("faceDis", faceDis)
+    for encodeFace, faceLoc in zip(
+        encodeCurFrame,
+        faceCurFrame
+    ):
 
-            matchIndex = np.argmin(faceDis)
-            # print("Match Index", matchIndex)
+        matches = face_recognition.compare_faces(
+            encodeListKnown,
+            encodeFace,
+            tolerance=0.50
+        )
 
-            if matches[matchIndex]:
-                # print("Known Face Detected")
-                # print(studentIds[matchIndex])
-                y1, x2, y2, x1 = faceLoc
-                y1, x2, y2, x1 = y1 * 4, x2 * 4, y2 * 4, x1 * 4
-                bbox = 55 + x1, 162 + y1, x2 - x1, y2 - y1
-                imgBackground = cvzone.cornerRect(imgBackground, bbox, rt=0)
-                id = studentIds[matchIndex]
-                if counter == 0:
-                    cvzone.putTextRect(imgBackground, "Loading", (275, 400))
-                    cv2.imshow("Face Attendance", imgBackground)
-                    cv2.waitKey(1)
-                    counter = 1
-                    modeType = 1
+        faceDis = face_recognition.face_distance(
+            encodeListKnown,
+            encodeFace
+        )
 
-        if counter != 0:
+        matchIndex = np.argmin(faceDis)
 
-            if counter == 1:
-                # Get the Data
-                studentInfo = supabase.table("Students").select("*").eq("student_id", id).execute()
-                data = studentInfo.data
+        if matches[matchIndex]:
 
-                print(studentInfo)
-                # Get the Image from the storage
-                blob = supabase.storage.from_("student-images").download(f'{id}.png')
-                array = np.frombuffer(blob, np.uint8)
-                imgStudent = cv2.imdecode(array, cv2.COLOR_BGRA2BGR)
-                # Update data of attendance
-                datetimeObject = datetime.fromisoformat(studentInfo.data[0]['last_attendance_time'])
-                secondsElapsed = (datetime.now() - datetimeObject).total_seconds()
-                print(secondsElapsed)
-                
-                if secondsElapsed > 30:
-                    new_total = studentInfo.data[0]['total_attendance'] + 1
+            id = str(studentIds[matchIndex])
 
-            # Update the Supabase table instead of Firebase
-                    response = supabase.table("Students").update({
-                    "total_attendance": new_total,
-                    "last_attendance_time": datetime.now().isoformat()
-                    }).eq("id", studentInfo.data[0]['id']).execute()
+            print(f"✅ Recognized Student ID: {id}")
 
-                    print("✅ Attendance updated successfully in Supabase:", response)
+            # Face location coordinates
+            y1, x2, y2, x1 = faceLoc
+
+            # Convert back because image was scaled 1/4
+            y1 *= 4
+            x2 *= 4
+            y2 *= 4
+            x1 *= 4
+
+            # Draw rectangle
+            cv2.rectangle(
+                img,
+                (x1, y1),
+                (x2, y2),
+                (0, 255, 0),
+                3
+            )
+
+            # Student information
+            try:
+
+                print(f"🔎 Searching student: {id}")
+
+                # IMPORTANT:
+                # Your actual Supabase table is "Students"
+                response = (
+                    supabase
+                    .table("Students")
+                    .select("*")
+                    .eq("student_id", id)
+                    .execute()
+                )
+
+                # IMPORTANT:
+                # Define data before using it
+                data = response.data
+
+                if not data:
+
+                    print(
+                        f"❌ Student ID {id} "
+                        "database me nahi mila"
+                    )
+
+                    cv2.putText(
+                        img,
+                        f"ID: {id} - Not Found",
+                        (x1, y1 - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0, 0, 255),
+                        2
+                    )
+
                 else:
-                    modeType = 3
-                    counter = 0
-                    imgBackground[44:44 + 633, 808:808 + 414] = imgModeList[modeType]
-            
-            if modeType != 3:
 
-                if 10 < counter < 20:
-                    modeType = 2
+                    student = data[0]
 
-                imgBackground[44:44 + 633, 808:808 + 414] = imgModeList[modeType]
+                    name = student.get(
+                        "name",
+                        "Unknown"
+                    )
 
-                if counter <= 10:
-                    cv2.putText(imgBackground,str(studentInfo.data[0]['total_attendance']),(861, 125),
-                                cv2.FONT_HERSHEY_COMPLEX,1,(255, 255, 255),1)
+                    major = student.get(
+                        "major",
+                        ""
+                    )
 
-                    cv2.putText(imgBackground, str(studentInfo.data[0]['major']), (1006, 550),
-                                cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 255), 1)
-                    cv2.putText(imgBackground, str(id), (1006, 493),
-                                cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 255), 1)
-                    cv2.putText(imgBackground, str(studentInfo.data[0]['standing']), (910, 625),
-                                cv2.FONT_HERSHEY_COMPLEX, 0.6, (100, 100, 100), 1)
-                    cv2.putText(imgBackground, str(studentInfo.data[0]['year']), (1025, 625),
-                                cv2.FONT_HERSHEY_COMPLEX, 0.6, (100, 100, 100), 1)
-                    cv2.putText(imgBackground, str(studentInfo.data[0]['starting_year']), (1125, 625),
-                                cv2.FONT_HERSHEY_COMPLEX, 0.6, (100, 100, 100), 1)
+                    totalAttendance = student.get(
+                        "total_attendance",
+                        0
+                    )
 
-                    (w, h), _ = cv2.getTextSize(studentInfo.data[0]['name'], cv2.FONT_HERSHEY_COMPLEX, 1, 1)
-                    offset = (414 - w) // 2
-                    cv2.putText(imgBackground, str(studentInfo.data[0]['name']), (808 + offset, 445),
-                                cv2.FONT_HERSHEY_COMPLEX, 1, (50, 50, 50), 1)
-                    imgStudent = cv2.resize(imgStudent, (216, 216))
-                    imgBackground[175:175 + 216, 909:909 + 216] = imgStudent
+                    standing = student.get(
+                        "standing",
+                        ""
+                    )
 
-                counter += 1
+                    year = student.get(
+                        "year",
+                        ""
+                    )
 
-                if counter >= 20:
-                    counter = 0
-                    modeType = 0
-                    studentInfo = []
-                    imgStudent = []
-                    imgBackground[44:44 + 633, 808:808 + 414] = imgModeList[modeType]
-    else:
-        modeType = 0
-        counter = 0
-    # cv2.imshow("Webcam", img)
-    cv2.imshow("Face Attendance", imgBackground)
-    cv2.waitKey(1)
+                    startingYear = student.get(
+                        "starting_year",
+                        ""
+                    )
+
+                    print(
+                        f"✅ Student found: {name}"
+                    )
+
+                    print(
+                        f"📚 Major: {major}"
+                    )
+
+                    print(
+                        f"📊 Attendance: "
+                        f"{totalAttendance}"
+                    )
+
+
+                    # =====================================
+                    # DISPLAY STUDENT INFO
+                    # =====================================
+
+                    cv2.rectangle(
+                        img,
+                        (x1, y2),
+                        (x2, y2 + 130),
+                        (0, 0, 0),
+                        -1
+                    )
+
+                    cv2.putText(
+                        img,
+                        name,
+                        (x1 + 10, y2 + 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (255, 255, 255),
+                        2
+                    )
+
+                    cv2.putText(
+                        img,
+                        f"ID: {id}",
+                        (x1 + 10, y2 + 60),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2
+                    )
+
+                    cv2.putText(
+                        img,
+                        f"AIML: {major}",
+                        (x1 + 10, y2 + 90),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2
+                    )
+
+                    cv2.putText(
+                        img,
+                        f"Attendance: {totalAttendance}",
+                        (x1 + 10, y2 + 120),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 255),
+                        2
+                    )
+
+
+                    # =====================================
+                    # ATTENDANCE
+                    # =====================================
+
+                    if (
+                        lastRecognizedId != id
+                        or not attendanceMarked
+                    ):
+
+                        try:
+
+                            currentTime = datetime.now(
+                                timezone.utc
+                            )
+
+                            # Current attendance
+                            newAttendance = (
+                                int(totalAttendance) + 1
+                            )
+
+                            updateData = {
+                                "total_attendance":
+                                    newAttendance,
+
+                                "last_attendance_time":
+                                    currentTime.isoformat()
+                            }
+
+                            (
+                                supabase
+                                .table("Students")
+                                .update(updateData)
+                                .eq("student_id", id)
+                                .execute()
+                            )
+
+                            print(
+                                f"🎉 Attendance marked "
+                                f"for {name}"
+                            )
+
+                            print(
+                                f"📊 New attendance: "
+                                f"{newAttendance}"
+                            )
+
+                            lastRecognizedId = id
+                            attendanceMarked = True
+
+                        except Exception as e:
+
+                            print(
+                                "❌ Attendance update error:",
+                                e
+                            )
+
+
+            except Exception as e:
+
+                print(
+                    "❌ Supabase/attendance error:",
+                    e
+                )
+
+                cv2.putText(
+                    img,
+                    "Database Error",
+                    (x1, y1 - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 0, 255),
+                    2
+                )
+
+
+    # =====================================================
+    # SHOW CAMERA
+    # =====================================================
+
+    cv2.imshow(
+        "AI Face Recognition Attendance",
+        img
+    )
+
+    # Q = Quit
+    key = cv2.waitKey(1) & 0xFF
+
+    if key == ord("q"):
+
+        print("👋 Camera closed")
+        break
+
+
+# =========================================================
+# CLEANUP
+# =========================================================
+
+cap.release()
+cv2.destroyAllWindows()
+
+print("✅ Program finished")
